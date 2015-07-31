@@ -247,7 +247,7 @@ sub key0 {
 print "\n";
 foreach (keys %fn_hash) {
     next if (($non_blank || /^SOCKET/) &&
-	     !(($fn_hash{$_}{bread}||0)+($fn_hash{$_}{bwrite}||0)));
+	     !(($fn_hash{$_}{bread}||0)+($fn_hash{$_}{bwrite}||0)+($fn_hash{$_}{nmmap}||0)));
 
     print "File: $_\n";
     print "    Num. open    \t",$fn_hash{$_}{nopen}||0,"\n";
