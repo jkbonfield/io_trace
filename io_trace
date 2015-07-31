@@ -34,12 +34,6 @@
 # NB: no mmap stats are computed other than the existance of it.
 
 
-# FIXME: unfinished I/O:
-# 13284 close(1 <unfinished ...>
-# 13285 read(0,  <unfinished ...>
-# 13284 <... close resumed> )             = 0
-# 13285 <... read resumed> "", 16384)     = 0
-
 # FIXME: openat; stitch the pathname to the dir open path
 
 
@@ -129,7 +123,16 @@ close($fh) || die "ERROR closing @cmd: $?";
 #close($trace_fh);
 #open($trace_fh, "<", $trace_fn);
 
+my %pid_unfinished; # for <unfinished...> and <...resumed> messages
 while (<$trace_fh>) {
+    if (/^(\d+)(.*) <unfinished \.\.\.>$/) {
+	$pid_unfinished{$1}=$1 . $2;
+	next;
+    }
+    if (/^(\d+)\s+<\.\.\.[^>]*resumed> (.*)/) {
+	$_="$pid_unfinished{$1}$2\n";
+    }
+
     if (/^\d+\s+open\("([^\"]*)",.* = (-?\d+)/) {
 	next if ($2 == -1);
 	my ($fn,$fd)=($1,$2);
