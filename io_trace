@@ -107,7 +107,7 @@ if ($do_sock) {
 # Execute the task, sending straces to a temp file.
 my ($trace_fh, $trace_fn) = tempfile();
 
-@cmd = ("strace", "-o", $trace_fn, "-s", "1000", "-f", @cmd);
+@cmd = ("strace", "-o", $trace_fn, "-s", "1000", "-f", "-e", "trace=file,desc,network", @cmd);
 open(my $fh, "-|", @cmd) || die "ERROR running @cmd: $?";
 while (<$fh>) {};
 close($fh) || die "ERROR closing @cmd: $?";
