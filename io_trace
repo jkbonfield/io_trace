@@ -1,0 +1,263 @@
+#!/usr/bin/perl -w
+
+#    Copyright (C) 2015 Genome Research Ltd.
+#    Author: James Bonfield (jkb@sanger.ac.uk).
+#
+#    This program is free software: you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation, either version 3 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# A wrapper around strace to identify the amount of I/O performed on
+# specific files.
+#
+# Usage: io_trace [-pr] filename_prefix ... -- command argument ...
+#
+# -p is for prefix matching of filename.
+# -r is for regexp matching of filename.
+# -x suppresses files never read or written
+# -S suppress standard fds and socket output
+#
+# Eg:tthe following commands all do the same thing:
+# io_trace foo.bam foo.bam.bai -- samtools view foo.bam chr1:100000-101000
+# io_trace -p foo.bam -- samtools view foo.bam chr1:100000-101000
+# io_trace -r '/foo\.bam(\.bai)$' -- samtools view foo.bam chr1:100000-101000
+#
+# NB: no mmap stats are computed other than the existance of it.
+
+
+# FIXME: unfinished I/O:
+# 13284 close(1 <unfinished ...>
+# 13285 read(0,  <unfinished ...>
+# 13284 <... close resumed> )             = 0
+# 13285 <... read resumed> "", 16384)     = 0
+
+# FIXME: openat; stitch the pathname to the dir open path
+
+
+use strict;
+
+use File::Temp qw/tempfile/;
+
+#-----------------------------------------------------------------------------
+# Process command line arguments
+my @fn = ();
+my $i;
+
+my $prefix = 0;
+my $regexp = 0;
+my $non_blank = 0;
+my $do_sock = 1;
+
+while($#ARGV > 0) {
+    if ($ARGV[0] eq "-p") { $prefix = 1; shift(@ARGV); next; }
+    if ($ARGV[0] eq "-r") { $regexp = 1; shift(@ARGV); next; }
+    if ($ARGV[0] eq "-x") { $non_blank = 1; shift(@ARGV); next; }
+    if ($ARGV[0] eq "-S") { $do_sock = 0; shift(@ARGV); next; }
+
+    last;
+}
+
+for ($i = 0; $i <= $#ARGV; $i++) {
+    last if ($ARGV[$i] eq "--");
+    push(@fn, $ARGV[$i]);
+}
+
+if ($i >= $#ARGV) {
+    print "Usage: io_trace [options] filename ... -- command argument ...\n";
+    print "e.g.:  io_trace -x -p foo.bam -- samtools view foo.bam X:100-110\n";
+    print "\nOptions:\n";
+    print "    -p prefix    Only output filenames matching a specific prefix\n";
+    print "    -r regexp    Only output filenames matching a specific regexp\n";
+    print "    -x           Suppress files with no I/O performed on them\n";
+    print "    -S           Suppress stdin/stdout/stderr and sockets\n";
+    exit 1;
+}
+
+$i++;
+my @cmd = @ARGV[$i..$#ARGV];
+
+my @fn_reg = ();
+
+my %fn_hash;
+foreach (@fn) {
+    if ($regexp) {
+	push(@fn_reg, "($_)");
+    } elsif ($prefix) {
+	s/([][.{}*?+\()|])/\\$1/g;
+	push(@fn_reg, "(^$_.*)");
+    } else {
+	$fn_hash{$_}{fd} = 0;
+    }
+}
+my $fn_regexp = join('|',@fn_reg);
+$fn_regexp = "." if ($fn_regexp eq "" && scalar(@fn) == 0);
+
+my @fd = ();
+
+if ($do_sock) {
+    $fn_hash{stdin}{fd}  = 0; $fd[0]="stdin";
+    $fn_hash{stdout}{fd} = 1; $fd[1]="stdout";
+    $fn_hash{stderr}{fd} = 2; $fd[2]="stderr";
+}
+
+#-----------------------------------------------------------------------------
+# Execute the task, sending straces to a temp file.
+my ($trace_fh, $trace_fn) = tempfile();
+
+@cmd = ("strace", "-o", $trace_fn, "-s", "1000", "-f", @cmd);
+open(my $fh, "-|", @cmd) || die "ERROR running @cmd: $?";
+while (<$fh>) {};
+close($fh) || die "ERROR closing @cmd: $?";
+
+# my $cmd = "strace -o $trace_fn -s 1000 -f @cmd";
+# open(my $fh, "-|", $cmd) || die "ERROR running $cmd: $?";
+# while (<$fh>) {};
+# close($fh) || die "ERROR closing $cmd: $?";
+
+#-----------------------------------------------------------------------------
+# Parse the open, reads, seeks and writes per file
+
+#close($trace_fh);
+#open($trace_fh, "<", $trace_fn);
+
+while (<$trace_fh>) {
+    if (/^\d+\s+open\("([^\"]*)",.* = (-?\d+)/) {
+	next if ($2 == -1);
+	my ($fn,$fd)=($1,$2);
+
+	next unless (exists($fn_hash{$1}) || 
+		     ($fn_regexp ne "" && ($fn =~ m/$fn_regexp/)));
+
+	#print "Open $fn => $fd\n";
+	$fn_hash{$fn}{fd} = $fd;
+	$fn_hash{$fn}{nopen}++;
+	$fd[$fd]=$fn;
+	next;
+    }
+
+    if (/^\d+\s+openat\([^,]*,\s+"([^\"]*)",.* = (-?\d+)/) {
+	next if ($2 == -1);
+	my ($fn,$fd)=($1,$2);
+
+	# Not working correctly, so use a wider regexp for substrings
+	next unless (exists($fn_hash{$1}) || 
+		     ($fn_regexp ne "" && ($fn =~ m/$fn_regexp/)));
+
+	$fn_hash{$fn}{fd} = $fd;
+	$fn_hash{$fn}{nopen}++;
+	$fd[$fd]=$fn;
+	next;
+    }
+
+    if (/^\d+\s+socket\(.* = (\d+)/ && $do_sock) {
+    	$fd[$1]="SOCKET($1)";
+    	next;
+    }
+
+    if (/^\d+\s+connect\((\d+),.*path="(.*)".* = (\d+)/ && $do_sock) {
+	$fd[$1]="SOCKET=$2";
+    }
+
+    if (/^\d+\s+connect\((\d+),.*port=htons\((\d+)\),.*addr\("(.*)"/ && $do_sock) {
+	$fd[$1]="SOCKET=$3:$2";
+    }
+
+    if (/^\d+\s+close\((\d+)/) {
+	next unless defined $fd[$1];
+	$fn_hash{$fd[$1]}{nclose}++;
+	$fd[$1] = undef;
+    }
+
+    if (/^\d+\s+read\((\d+),.* = (\d+)/) {
+	next unless defined $fd[$1];
+	$fn_hash{$fd[$1]}{nread}++;
+	$fn_hash{$fd[$1]}{bread}+=$2;
+    }
+
+    if (/^\d+\s+write\((\d+),.* = (\d+)/) {
+	next unless defined $fd[$1];
+	$fn_hash{$fd[$1]}{nwrite}++;
+	$fn_hash{$fd[$1]}{bwrite}+=$2;
+    }
+
+    if (/^\d+\s+pread\((\d+),.* = (\d+)/) {
+	next unless defined $fd[$1];
+	$fn_hash{$fd[$1]}{npread}++;
+	$fn_hash{$fd[$1]}{bread}+=$2;
+    }
+
+    if (/^\d+\s+pwrite\((\d+),.* = (\d+)/) {
+	next unless defined $fd[$1];
+	$fn_hash{$fd[$1]}{npwrite}++;
+	$fn_hash{$fd[$1]}{bwrite}+=$2;
+    }
+
+    if (/^\d+\s+recvfrom\((\d+),.* = (\d+)/) {
+	next unless defined $fd[$1];
+	$fn_hash{$fd[$1]}{nrecvfrom}++;
+	$fn_hash{$fd[$1]}{bread}+=$2;
+    }
+
+    if (/^\d+\s+sendto\((\d+),.* = (\d+)/) {
+	next unless defined $fd[$1];
+	$fn_hash{$fd[$1]}{nsendto}++;
+	$fn_hash{$fd[$1]}{bwrite}+=$2;
+    }
+
+    if (/^\d+\s+[a-z]*seek[a-z]*\((\d+),.* = (\d+)/) {
+	next unless defined $fd[$1];
+	$fn_hash{$fd[$1]}{nseek}++;
+	$fn_hash{$fd[$1]}{bseek}+=$2;
+    }
+
+    if (/^\d+\s+[a-z]*mmap[a-z]*\(.*, (\d+), [^)]*\) = /) {
+	next unless defined $fd[$1];
+	$fn_hash{$fd[$1]}{nmmap}++;
+    }
+}
+close($trace_fh);
+unlink($trace_fn);
+
+
+#-----------------------------------------------------------------------------
+# Summarise results
+
+sub key0 {
+    my ($hr,$key) = @_;
+
+    if (exists($hr->{$key})) {
+	return $hr->{$key};
+    } else {
+	return 0;
+    }
+}
+
+print "\n";
+foreach (keys %fn_hash) {
+    next if (($non_blank || /^SOCKET/) &&
+	     !(($fn_hash{$_}{bread}||0)+($fn_hash{$_}{bwrite}||0)));
+
+    print "File: $_\n";
+    print "    Num. open    \t",$fn_hash{$_}{nopen}||0,"\n";
+    print "    Num. close   \t",$fn_hash{$_}{nclose}||0,"\n";
+    print "    Num. mmap    \t",$fn_hash{$_}{nmmap}||0,"\n";
+    print "    Num. seeks   \t",$fn_hash{$_}{nseek}||0,"\n";
+    print "    Num. read    \t",$fn_hash{$_}{nread}||0,"\n";
+    print "    Num. pread   \t",$fn_hash{$_}{npread}||0,"\n";
+    print "    Num. sendto  \t",$fn_hash{$_}{nsendto}||0,"\n";
+    print "    Num. write   \t",$fn_hash{$_}{nwrite}||0,"\n";
+    print "    Num. pwrite  \t",$fn_hash{$_}{npwrite}||0,"\n";
+    print "    Num. recvfrom\t",$fn_hash{$_}{nrecvfrom}||0,"\n";
+    print "    Bytes read   \t",$fn_hash{$_}{bread}||0,"\n";
+    print "    Bytes written\t",$fn_hash{$_}{bwrite}||0,"\n";
+    print "\n";
+}
