@@ -25,6 +25,7 @@
 # -r is for regexp matching of filename.
 # -x suppresses files never read or written
 # -S suppress standard fds and socket output
+# -z Show zero values in output
 #
 # Eg:tthe following commands all do the same thing:
 # io_trace foo.bam foo.bam.bai -- samtools view foo.bam chr1:100000-101000
@@ -50,12 +51,14 @@ my $prefix = 0;
 my $regexp = 0;
 my $non_blank = 0;
 my $do_sock = 1;
+my $do_zero = 0;
 
 while($#ARGV > 0) {
     if ($ARGV[0] eq "-p") { $prefix = 1; shift(@ARGV); next; }
     if ($ARGV[0] eq "-r") { $regexp = 1; shift(@ARGV); next; }
     if ($ARGV[0] eq "-x") { $non_blank = 1; shift(@ARGV); next; }
     if ($ARGV[0] eq "-S") { $do_sock = 0; shift(@ARGV); next; }
+    if ($ARGV[0] eq "-z") { $do_zero = 1; shift(@ARGV); next; }
 
     last;
 }
@@ -73,6 +76,7 @@ if ($i >= $#ARGV) {
     print "    -r regexp    Only output filenames matching a specific regexp\n";
     print "    -x           Suppress files with no I/O performed on them\n";
     print "    -S           Suppress stdin/stdout/stderr and sockets\n";
+    print "    -z           Show zero values in output\n";
     exit 1;
 }
 
@@ -107,7 +111,7 @@ if ($do_sock) {
 # Execute the task, sending straces to a temp file.
 my ($trace_fh, $trace_fn) = tempfile();
 
-@cmd = ("strace", "-o", $trace_fn, "-s", "1000", "-f", "-e", "trace=file,desc,network", @cmd);
+@cmd = ("strace", "-o", $trace_fn, "-s", "1000", "-f", "-e", "trace=file,desc,network,mmap", @cmd);
 open(my $fh, "-|", @cmd) || die "ERROR running @cmd: $?";
 while (<$fh>) {};
 close($fh) || die "ERROR closing @cmd: $?";
@@ -222,7 +226,7 @@ while (<$trace_fh>) {
 	$fn_hash{$fd[$1]}{bseek}+=$2;
     }
 
-    if (/^\d+\s+[a-z]*mmap[a-z]*\(.*, (\d+), [^)]*\) = /) {
+    if (/^\d+\s+[a-z]*mmap[a-z]*\(.*, (\d+),\s+\d+\s*\) = /) {
 	next unless defined $fd[$1];
 	$fn_hash{$fd[$1]}{nmmap}++;
     }
@@ -250,17 +254,17 @@ foreach (keys %fn_hash) {
 	     !(($fn_hash{$_}{bread}||0)+($fn_hash{$_}{bwrite}||0)+($fn_hash{$_}{nmmap}||0)));
 
     print "File: $_\n";
-    print "    Num. open    \t",$fn_hash{$_}{nopen}||0,"\n";
-    print "    Num. close   \t",$fn_hash{$_}{nclose}||0,"\n";
-    print "    Num. mmap    \t",$fn_hash{$_}{nmmap}||0,"\n";
-    print "    Num. seeks   \t",$fn_hash{$_}{nseek}||0,"\n";
-    print "    Num. read    \t",$fn_hash{$_}{nread}||0,"\n";
-    print "    Num. pread   \t",$fn_hash{$_}{npread}||0,"\n";
-    print "    Num. sendto  \t",$fn_hash{$_}{nsendto}||0,"\n";
-    print "    Num. write   \t",$fn_hash{$_}{nwrite}||0,"\n";
-    print "    Num. pwrite  \t",$fn_hash{$_}{npwrite}||0,"\n";
-    print "    Num. recvfrom\t",$fn_hash{$_}{nrecvfrom}||0,"\n";
-    print "    Bytes read   \t",$fn_hash{$_}{bread}||0,"\n";
-    print "    Bytes written\t",$fn_hash{$_}{bwrite}||0,"\n";
+    print "    Num. open    \t",$fn_hash{$_}{nopen}||0,"\n"     if $fn_hash{$_}{nopen}||$do_zero;
+    print "    Num. close   \t",$fn_hash{$_}{nclose}||0,"\n"    if $fn_hash{$_}{nclose}||$do_zero;
+    print "    Num. mmap    \t",$fn_hash{$_}{nmmap}||0,"\n"     if $fn_hash{$_}{nmmap}||$do_zero;
+    print "    Num. seeks   \t",$fn_hash{$_}{nseek}||0,"\n"     if $fn_hash{$_}{nseek}||$do_zero;
+    print "    Num. read    \t",$fn_hash{$_}{nread}||0,"\n"     if $fn_hash{$_}{nread}||$do_zero;
+    print "    Num. pread   \t",$fn_hash{$_}{npread}||0,"\n"    if $fn_hash{$_}{npread}||$do_zero;
+    print "    Num. sendto  \t",$fn_hash{$_}{nsendto}||0,"\n"   if $fn_hash{$_}{nsendto}||$do_zero;
+    print "    Num. write   \t",$fn_hash{$_}{nwrite}||0,"\n"    if $fn_hash{$_}{nwrite}||$do_zero;
+    print "    Num. pwrite  \t",$fn_hash{$_}{npwrite}||0,"\n"   if $fn_hash{$_}{npwrite}||$do_zero;
+    print "    Num. recvfrom\t",$fn_hash{$_}{nrecvfrom}||0,"\n" if $fn_hash{$_}{nrecvfrom}||$do_zero;
+    print "    Bytes read   \t",$fn_hash{$_}{bread}||0,"\n"     if $fn_hash{$_}{bread}||$do_zero;
+    print "    Bytes written\t",$fn_hash{$_}{bwrite}||0,"\n"    if $fn_hash{$_}{bwrite}||$do_zero;
     print "\n";
 }
