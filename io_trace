@@ -196,6 +196,18 @@ while (<$trace_fh>) {
 	$fn_hash{$fd[$1]}{bwrite}+=$2;
     }
 
+    if (/^\d+\s+readv\((\d+),.* = (\d+)/) {
+	next unless defined $fd[$1];
+	$fn_hash{$fd[$1]}{nreadv}++;
+	$fn_hash{$fd[$1]}{bread}+=$2;
+    }
+
+    if (/^\d+\s+writev\((\d+),.* = (\d+)/) {
+	next unless defined $fd[$1];
+	$fn_hash{$fd[$1]}{nwritev}++;
+	$fn_hash{$fd[$1]}{bwrite}+=$2;
+    }
+
     if (/^\d+\s+pread\((\d+),.* = (\d+)/) {
 	next unless defined $fd[$1];
 	$fn_hash{$fd[$1]}{npread}++;
@@ -205,6 +217,18 @@ while (<$trace_fh>) {
     if (/^\d+\s+pwrite\((\d+),.* = (\d+)/) {
 	next unless defined $fd[$1];
 	$fn_hash{$fd[$1]}{npwrite}++;
+	$fn_hash{$fd[$1]}{bwrite}+=$2;
+    }
+
+    if (/^\d+\s+preadv\((\d+),.* = (\d+)/) {
+	next unless defined $fd[$1];
+	$fn_hash{$fd[$1]}{npreadv}++;
+	$fn_hash{$fd[$1]}{bread}+=$2;
+    }
+
+    if (/^\d+\s+pwritev\((\d+),.* = (\d+)/) {
+	next unless defined $fd[$1];
+	$fn_hash{$fd[$1]}{npwritev}++;
 	$fn_hash{$fd[$1]}{bwrite}+=$2;
     }
 
@@ -260,10 +284,14 @@ foreach (keys %fn_hash) {
     print "    Num. seeks   \t",$fn_hash{$_}{nseek}||0,"\n"     if $fn_hash{$_}{nseek}||$do_zero;
     print "    Num. read    \t",$fn_hash{$_}{nread}||0,"\n"     if $fn_hash{$_}{nread}||$do_zero;
     print "    Num. pread   \t",$fn_hash{$_}{npread}||0,"\n"    if $fn_hash{$_}{npread}||$do_zero;
-    print "    Num. sendto  \t",$fn_hash{$_}{nsendto}||0,"\n"   if $fn_hash{$_}{nsendto}||$do_zero;
     print "    Num. write   \t",$fn_hash{$_}{nwrite}||0,"\n"    if $fn_hash{$_}{nwrite}||$do_zero;
     print "    Num. pwrite  \t",$fn_hash{$_}{npwrite}||0,"\n"   if $fn_hash{$_}{npwrite}||$do_zero;
+    print "    Num. readv   \t",$fn_hash{$_}{nreadv}||0,"\n"    if $fn_hash{$_}{nreadv}||$do_zero;
+    print "    Num. preadv  \t",$fn_hash{$_}{npreadv}||0,"\n"   if $fn_hash{$_}{npreadv}||$do_zero;
+    print "    Num. writev  \t",$fn_hash{$_}{nwritev}||0,"\n"   if $fn_hash{$_}{nwritev}||$do_zero;
+    print "    Num. pwritev \t",$fn_hash{$_}{npwritev}||0,"\n"  if $fn_hash{$_}{npwritev}||$do_zero;
     print "    Num. recvfrom\t",$fn_hash{$_}{nrecvfrom}||0,"\n" if $fn_hash{$_}{nrecvfrom}||$do_zero;
+    print "    Num. sendto  \t",$fn_hash{$_}{nsendto}||0,"\n"   if $fn_hash{$_}{nsendto}||$do_zero;
     print "    Bytes read   \t",$fn_hash{$_}{bread}||0,"\n"     if $fn_hash{$_}{bread}||$do_zero;
     print "    Bytes written\t",$fn_hash{$_}{bwrite}||0,"\n"    if $fn_hash{$_}{bwrite}||$do_zero;
     print "\n";
